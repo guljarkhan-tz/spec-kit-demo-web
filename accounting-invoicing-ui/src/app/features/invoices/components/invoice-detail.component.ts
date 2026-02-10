@@ -1,0 +1,135 @@
+import { ChangeDetectionStrategy, Component, OnInit, inject } from '@angular/core';
+import { NgIf, NgFor } from '@angular/common';
+import { ActivatedRoute, RouterLink } from '@angular/router';
+import { InvoiceStoreService } from '../services/invoice-store.service';
+import { InvoicePdfService } from '../services/invoice-pdf.service';
+import { InvoiceMetadataEditComponent } from './invoice-metadata-edit.component';
+import { LoadingComponent } from '@shared/components/loading.component';
+import { ErrorDisplayComponent } from '@shared/components/error-display.component';
+import { asInvoiceId } from '@shared/models/types';
+import { amountFormat } from '@shared/models/financial-amount';
+import { InvoiceMetadataUpdate } from '../models/invoice.model';
+
+@Component({
+  selector: 'app-invoice-detail',
+  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [NgIf, NgFor, RouterLink, InvoiceMetadataEditComponent, LoadingComponent, ErrorDisplayComponent],
+  template: `
+    <div *ngIf="store.loading()"><app-loading label="Loading invoice" /></div>
+    <div *ngIf="store.error() as err"><app-error-display [apiError]="err" title="Unable to load invoice" /></div>
+
+    <div *ngIf="store.selected() as invoice" class="space-y-4">
+      <div class="rounded-lg border border-slate-200 bg-white p-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-sm font-semibold text-slate-900">Invoice {{ invoice.number }}</div>
+            <div class="mt-1 text-sm text-slate-700">Status: {{ invoice.status }} • Frequency: {{ invoice.frequency }}</div>
+            <div class="mt-1 text-sm text-slate-700">Period: {{ invoice.billingPeriod.description }}</div>
+          </div>
+          <button
+            type="button"
+            class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800"
+            (click)="download(invoice.id, invoice.number)"
+          >
+            Download PDF
+          </button>
+        </div>
+
+        <div class="mt-4 grid gap-3 md:grid-cols-3">
+          <div>
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total</div>
+            <div class="text-sm">{{ format(invoice.totalAmount) }}</div>
+          </div>
+          <div>
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Paid</div>
+            <div class="text-sm">{{ format(invoice.amountPaid) }}</div>
+          </div>
+          <div>
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Outstanding</div>
+            <div class="text-sm">{{ format(invoice.outstandingAmount) }}</div>
+          </div>
+        </div>
+
+        <div class="mt-4 text-xs text-slate-500">Financial fields are read-only.</div>
+      </div>
+
+      <div class="rounded-lg border border-slate-200 bg-white p-4">
+        <div class="text-sm font-semibold text-slate-900">Line Items</div>
+        <div class="mt-3 overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Ride</th>
+                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Service Date</th>
+                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Description</th>
+                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Fare</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200">
+              <tr *ngFor="let item of invoice.lineItems; trackBy: trackByRide">
+                <td class="px-3 py-2 text-sm text-slate-700">{{ item.rideId }}</td>
+                <td class="px-3 py-2 text-sm text-slate-700">{{ item.serviceDate }}</td>
+                <td class="px-3 py-2 text-sm text-slate-700">{{ item.description }}</td>
+                <td class="px-3 py-2 text-sm text-slate-700">{{ format(item.fare) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="rounded-lg border border-slate-200 bg-white p-4">
+        <div class="text-sm font-semibold text-slate-900">Editable Metadata</div>
+        <div class="mt-3">
+          <app-invoice-metadata-edit
+            [initial]="{ notes: invoice.notes, internalReference: invoice.internalReference, billingContact: invoice.billingContact }"
+            (save)="save(invoice.id, $event)"
+          />
+        </div>
+      </div>
+
+      <div class="rounded-lg border border-slate-200 bg-white p-4">
+        <div class="text-sm font-semibold text-slate-900">Audit</div>
+        <dl class="mt-3 grid gap-2 md:grid-cols-2">
+          <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Generated By</dt><dd class="text-sm">{{ invoice.generatedBy }}</dd></div>
+          <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Generated At</dt><dd class="text-sm">{{ invoice.generatedAt }}</dd></div>
+          <div><dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Last Metadata Update</dt><dd class="text-sm">{{ invoice.lastMetadataUpdate }}</dd></div>
+        </dl>
+      </div>
+
+      <div class="rounded-lg border border-slate-200 bg-white p-4">
+        <div class="text-sm font-semibold text-slate-900">Cross-Reference</div>
+        <div class="mt-2 text-sm">
+          <a class="text-blue-700 hover:underline" [routerLink]="['../transactions']" [queryParams]="{ linkedInvoiceId: invoice.id }">
+            View related ledger entries
+          </a>
+        </div>
+      </div>
+    </div>
+  `,
+})
+export class InvoiceDetailComponent implements OnInit {
+  readonly store = inject(InvoiceStoreService);
+  private readonly pdf = inject(InvoicePdfService);
+  private readonly route = inject(ActivatedRoute);
+
+  ngOnInit(): void {
+    this.route.paramMap.subscribe((params) => {
+      const invoiceId = params.get('invoiceId');
+      if (invoiceId) {
+        this.store.loadInvoice(asInvoiceId(invoiceId));
+      }
+    });
+  }
+
+  download(invoiceId: unknown, number: string): void {
+    this.pdf.downloadPdf(asInvoiceId(String(invoiceId)), `${number}.pdf`).subscribe();
+  }
+
+  save(invoiceId: unknown, update: any): void {
+    this.store.updateMetadata(asInvoiceId(String(invoiceId)), update as InvoiceMetadataUpdate);
+  }
+
+  trackByRide = (_: number, item: { rideId: string }) => item.rideId;
+  format = amountFormat;
+}

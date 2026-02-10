@@ -1,0 +1,607 @@
+openapi: 3.0.3
+info:
+  title: Ledger Entries API
+  description: Read-only ledger entry access for transaction history review
+  version: 1.0.0
+  contact:
+    name: Accounting & Invoicing API Team
+
+servers:
+  - url: https://api.accounting.example.com/v1
+    description: Production server
+  - url: https://staging-api.accounting.example.com/v1
+    description: Staging server
+
+security:
+  - BearerAuth: []
+
+paths:
+  /accounts/{accountId}/ledger-entries:
+    get:
+      summary: List ledger entries for account
+      description: |
+        Retrieves ledger entries for the specified account with filtering and pagination.
+        Supports FR-003 (Ledger List View) and FR-004 (Ledger Filters).
+        Performance target: <2 seconds for last 90 days (FR-014).
+      operationId: listLedgerEntries
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Account identifier for ledger entries
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant isolation boundary
+        - name: days
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 365
+            default: 90
+          description: Number of days back from today to retrieve
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Start date for date range filter (overrides days param)
+          example: "2026-01-01"
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+          description: End date for date range filter (requires startDate)
+          example: "2026-01-31"
+        - name: sourceType
+          in: query
+          schema:
+            type: string
+            enum: [RIDE, PAYMENT]
+          description: Filter by transaction source type
+        - name: minAmount
+          in: query
+          schema:
+            type: number
+            format: double
+            minimum: 0
+          description: Minimum amount filter (in dollars)
+          example: 50.00
+        - name: maxAmount
+          in: query
+          schema:
+            type: number
+            format: double
+            minimum: 0
+          description: Maximum amount filter (in dollars)
+          example: 500.00
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+          description: Maximum entries to return
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Number of entries to skip for pagination
+        - name: orderBy
+          in: query
+          schema:
+            type: string
+            enum: [postingDate, amount]
+            default: postingDate
+          description: Field to order results by
+        - name: orderDirection
+          in: query
+          schema:
+            type: string
+            enum: [ASC, DESC]
+            default: DESC
+          description: Sort direction (DESC = newest first)
+      responses:
+        '200':
+          description: Successfully retrieved ledger entries
+          headers:
+            X-Total-Count:
+              description: Total entries matching filters
+              schema:
+                type: integer
+            X-Performance-Time:
+              description: Query execution time in milliseconds
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LedgerEntry'
+                  pagination:
+                    $ref: '#/components/schemas/PaginationInfo'
+                  summary:
+                    $ref: '#/components/schemas/LedgerSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TenantBoundaryViolation'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /ledger-entries/{entryId}:
+    get:
+      summary: Get ledger entry details
+      description: |
+        Retrieves detailed information for a specific ledger entry.
+        Supports FR-005: Ledger Entry Detail View requirements.
+      operationId: getLedgerEntryById
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Unique ledger entry identifier
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant isolation boundary
+      responses:
+        '200':
+          description: Ledger entry details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerEntryDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TenantBoundaryViolation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    put:
+      summary: Attempt to modify ledger entry (always returns error)
+      description: |
+        This endpoint exists to enforce FR-006: Read-only access constraint.
+        All modification attempts return 422 Unprocessable Entity.
+      operationId: rejectLedgerEntryModification
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '422':
+          $ref: '#/components/responses/ImmutableDataModification'
+
+    delete:
+      summary: Attempt to delete ledger entry (always returns error)
+      description: |
+        This endpoint exists to enforce FR-006: Read-only access constraint.
+        All deletion attempts return 422 Unprocessable Entity.
+      operationId: rejectLedgerEntryDeletion
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '422':
+          $ref: '#/components/responses/ImmutableDataModification'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    LedgerEntry:
+      type: object
+      description: Immutable ledger entry record
+      required:
+        - id
+        - accountId
+        - tenantId
+        - postingDate
+        - sourceType
+        - sourceReferenceId
+        - debitAmount
+        - creditAmount
+        - runningBalance
+        - description
+        - readonly
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique ledger entry identifier
+          example: "le-660e8400-e29b-41d4-a716-446655440001"
+        accountId:
+          type: string
+          format: uuid
+          description: Associated account identifier
+          example: "acc-550e8400-e29b-41d4-a716-446655440001"
+        tenantId:
+          type: string
+          format: uuid
+          description: Tenant boundary identifier
+          example: "tenant-550e8400-e29b-41d4-a716-446655440000"
+        postingDate:
+          type: string
+          format: date-time
+          description: When entry was posted to ledger
+          example: "2026-02-09T14:30:00Z"
+        sourceType:
+          type: string
+          enum: [RIDE, PAYMENT]
+          description: Type of originating transaction
+          example: "RIDE"
+        sourceReferenceId:
+          type: string
+          description: ID of originating ride or payment
+          example: "ride-770e8400-e29b-41d4-a716-446655440002"
+        debitAmount:
+          $ref: '#/components/schemas/FinancialAmount'
+        creditAmount:
+          $ref: '#/components/schemas/FinancialAmount'
+        runningBalance:
+          $ref: '#/components/schemas/FinancialAmount'
+        description:
+          type: string
+          maxLength: 500
+          description: Human-readable transaction description
+          example: "Medical transport service - City General to Regional Clinic"
+        linkedInvoiceId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Associated invoice if applicable
+          example: "inv-880e8400-e29b-41d4-a716-446655440003"
+        readonly:
+          type: boolean
+          enum: [true]
+          description: Enforces immutability constraint
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          description: Entry creation timestamp
+          example: "2026-02-09T14:30:00Z"
+
+    LedgerEntryDetail:
+      allOf:
+        - $ref: '#/components/schemas/LedgerEntry'
+        - type: object
+          properties:
+            metadata:
+              $ref: '#/components/schemas/LedgerMetadata'
+            sourceDetails:
+              $ref: '#/components/schemas/SourceDetails'
+            linkedInvoice:
+              $ref: '#/components/schemas/LinkedInvoiceInfo'
+
+    LedgerMetadata:
+      type: object
+      description: Additional ledger entry context
+      properties:
+        originalTransactionId:
+          type: string
+          description: Original transaction system ID
+        processingBatch:
+          type: string
+          description: Batch identifier for grouped processing
+        reconciliationStatus:
+          type: string
+          enum: [PENDING, RECONCILED, DISPUTED]
+        internalNotes:
+          type: string
+          maxLength: 1000
+          description: Internal processing notes
+        externalReference:
+          type: string
+          description: External system reference
+        tags:
+          type: array
+          items:
+            type: string
+          description: Categorization tags
+
+    SourceDetails:
+      type: object
+      description: Details about the source transaction
+      properties:
+        rideDetails:
+          type: object
+          properties:
+            pickupLocation:
+              type: string
+            dropoffLocation:
+              type: string
+            serviceDate:
+              type: string
+              format: date-time
+            vehicleType:
+              type: string
+            driverName:
+              type: string
+            passengerName:
+              type: string
+        paymentDetails:
+          type: object
+          properties:
+            paymentMethod:
+              type: string
+              enum: [CASH, CHECK, CREDIT_CARD, ACH, WIRE_TRANSFER]
+            paymentDate:
+              type: string
+              format: date-time
+            referenceNumber:
+              type: string
+            payerName:
+              type: string
+            processingFee:
+              $ref: '#/components/schemas/FinancialAmount'
+
+    LinkedInvoiceInfo:
+      type: object
+      description: Information about linked invoice
+      nullable: true
+      properties:
+        invoiceId:
+          type: string
+          format: uuid
+        invoiceNumber:
+          type: string
+        billingPeriod:
+          type: object
+          properties:
+            startDate:
+              type: string
+              format: date
+            endDate:
+              type: string
+              format: date
+        status:
+          type: string
+          enum: [DRAFT, ISSUED, PAID, OVERDUE]
+
+    LedgerSummary:
+      type: object
+      description: Summary statistics for filtered ledger entries
+      required:
+        - totalEntries
+        - totalDebits
+        - totalCredits
+        - netChange
+        - dateRange
+      properties:
+        totalEntries:
+          type: integer
+          minimum: 0
+          description: Count of entries in result set
+        totalDebits:
+          $ref: '#/components/schemas/FinancialAmount'
+        totalCredits:
+          $ref: '#/components/schemas/FinancialAmount'
+        netChange:
+          $ref: '#/components/schemas/FinancialAmount'
+        dateRange:
+          type: object
+          properties:
+            startDate:
+              type: string
+              format: date-time
+            endDate:
+              type: string
+              format: date-time
+        sourceTypeBreakdown:
+          type: object
+          properties:
+            rideCount:
+              type: integer
+            paymentCount:
+              type: integer
+            rideAmount:
+              $ref: '#/components/schemas/FinancialAmount'
+            paymentAmount:
+              $ref: '#/components/schemas/FinancialAmount'
+
+    FinancialAmount:
+      type: object
+      description: Precise financial amount representation
+      required:
+        - value
+        - cents
+        - formatted
+        - currency
+      properties:
+        value:
+          type: number
+          format: double
+          description: Decimal value for display
+          example: 125.50
+        cents:
+          type: integer
+          description: Cents for precise calculations
+          example: 12550
+        formatted:
+          type: string
+          description: Formatted currency display
+          example: "$125.50"
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: ISO 4217 currency code
+          example: "USD"
+
+    PaginationInfo:
+      type: object
+      required:
+        - limit
+        - offset
+        - total
+        - hasMore
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+        total:
+          type: integer
+          minimum: 0
+        hasMore:
+          type: boolean
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+        - timestamp
+        - requestId
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "INVALID_DATE_RANGE"
+            message: "End date must be after start date"
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_def456ghi"
+
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    TenantBoundaryViolation:
+      description: Tenant isolation violation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "TENANT_BOUNDARY_VIOLATION"
+            message: "Ledger entry not found in your tenant"
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_def456ghi"
+
+    AccountNotFound:
+      description: Account not found in tenant
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "ACCOUNT_NOT_FOUND"
+            message: "Account acc-550e8400-e29b-41d4-a716-446655440001 not found in your tenant"
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_def456ghi"
+
+    NotFound:
+      description: Ledger entry not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "LEDGER_ENTRY_NOT_FOUND"
+            message: "Ledger entry le-660e8400-e29b-41d4-a716-446655440001 not found"
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_def456ghi"
+
+    ImmutableDataModification:
+      description: Attempted modification of immutable financial data
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "IMMUTABLE_DATA_MODIFICATION"
+            message: "Ledger entries are immutable and cannot be modified or deleted"
+            details:
+              reason: "Financial audit integrity requires immutable ledger entries"
+              allowedOperations: ["GET"]
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_def456ghi"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

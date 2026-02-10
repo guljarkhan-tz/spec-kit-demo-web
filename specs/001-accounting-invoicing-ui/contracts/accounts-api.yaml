@@ -1,0 +1,440 @@
+openapi: 3.0.3
+info:
+  title: Accounts API
+  description: Account management endpoints for tenant-scoped financial data access
+  version: 1.0.0
+  contact:
+    name: Accounting & Invoicing API Team
+
+servers:
+  - url: https://api.accounting.example.com/v1
+    description: Production server
+  - url: https://staging-api.accounting.example.com/v1
+    description: Staging server
+
+security:
+  - BearerAuth: []
+
+paths:
+  /accounts:
+    get:
+      summary: List accounts within tenant
+      description: |
+        Retrieves all accounts accessible to the authenticated user within their tenant boundary.
+        Supports FR-001: Account List View requirements.
+      operationId: listAccounts
+      parameters:
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant isolation boundary
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ACTIVE, SUSPENDED, CLOSED]
+          description: Filter accounts by status
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [ORGANIZATION, INDIVIDUAL]
+          description: Filter accounts by type
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          description: Maximum number of accounts to return
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Number of accounts to skip for pagination
+      responses:
+        '200':
+          description: Successfully retrieved accounts list
+          headers:
+            X-Total-Count:
+              description: Total number of accounts matching filter
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Account'
+                  pagination:
+                    $ref: '#/components/schemas/PaginationInfo'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TenantBoundaryViolation'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /accounts/{accountId}:
+    get:
+      summary: Get account details
+      description: |
+        Retrieves detailed information for a specific account.
+        Supports FR-002: Account Detail View requirements.
+      operationId: getAccountById
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Unique account identifier
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant isolation boundary
+      responses:
+        '200':
+          description: Account details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TenantBoundaryViolation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Account:
+      type: object
+      description: Account entity for list view
+      required:
+        - id
+        - tenantId
+        - name
+        - type
+        - currentBalance
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique account identifier
+          example: "acc-550e8400-e29b-41d4-a716-446655440001"
+        tenantId:
+          type: string
+          format: uuid
+          description: Tenant boundary identifier
+          example: "tenant-550e8400-e29b-41d4-a716-446655440000"
+        name:
+          type: string
+          maxLength: 255
+          description: Account display name
+          example: "City General Hospital"
+        type:
+          type: string
+          enum: [ORGANIZATION, INDIVIDUAL]
+          description: Account classification
+          example: "ORGANIZATION"
+        currentBalance:
+          $ref: '#/components/schemas/FinancialAmount'
+        lastInvoiceDate:
+          type: string
+          format: date
+          nullable: true
+          description: Date of most recent invoice
+          example: "2026-01-31"
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED, CLOSED]
+          description: Current account status
+          example: "ACTIVE"
+        createdAt:
+          type: string
+          format: date-time
+          description: Account creation timestamp
+          example: "2025-06-15T10:30:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last modification timestamp
+          example: "2026-02-09T14:22:00Z"
+
+    AccountDetail:
+      allOf:
+        - $ref: '#/components/schemas/Account'
+        - type: object
+          properties:
+            metadata:
+              $ref: '#/components/schemas/AccountMetadata'
+            summary:
+              $ref: '#/components/schemas/AccountSummary'
+
+    AccountMetadata:
+      type: object
+      description: Additional account information
+      properties:
+        organizationDetails:
+          type: object
+          properties:
+            taxId:
+              type: string
+              description: Tax identification number
+            contactPerson:
+              type: string
+              description: Primary contact person
+            departmentName:
+              type: string
+              description: Department or division name
+        individualDetails:
+          type: object
+          properties:
+            dateOfBirth:
+              type: string
+              format: date
+            guardianName:
+              type: string
+              description: Guardian or responsible party
+        billingAddress:
+          $ref: '#/components/schemas/Address'
+        communicationPreferences:
+          type: object
+          properties:
+            emailNotifications:
+              type: boolean
+              default: true
+            paperStatements:
+              type: boolean
+              default: false
+
+    AccountSummary:
+      type: object
+      description: Account financial summary
+      required:
+        - totalLedgerEntries
+        - totalInvoices
+        - currentBalance
+        - lastActivityDate
+      properties:
+        totalLedgerEntries:
+          type: integer
+          minimum: 0
+          description: Count of ledger entries
+          example: 127
+        totalInvoices:
+          type: integer
+          minimum: 0
+          description: Count of invoices
+          example: 12
+        currentBalance:
+          $ref: '#/components/schemas/FinancialAmount'
+        lastActivityDate:
+          type: string
+          format: date-time
+          description: Date of last ledger entry or invoice
+          example: "2026-02-09T09:15:00Z"
+        last90DaysActivity:
+          type: object
+          properties:
+            transactionCount:
+              type: integer
+              minimum: 0
+            totalCharges:
+              $ref: '#/components/schemas/FinancialAmount'
+            totalPayments:
+              $ref: '#/components/schemas/FinancialAmount'
+
+    FinancialAmount:
+      type: object
+      description: Precise financial amount representation
+      required:
+        - value
+        - cents
+        - formatted
+        - currency
+      properties:
+        value:
+          type: number
+          format: double
+          description: Decimal value for display
+          example: 1234.56
+        cents:
+          type: integer
+          description: Cents for precise calculations
+          example: 123456
+        formatted:
+          type: string
+          description: Formatted currency display
+          example: "$1,234.56"
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: ISO 4217 currency code
+          example: "USD"
+
+    Address:
+      type: object
+      properties:
+        street:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 50
+        zipCode:
+          type: string
+          pattern: '^\d{5}(-\d{4})?$'
+        country:
+          type: string
+          maxLength: 50
+          default: "USA"
+
+    PaginationInfo:
+      type: object
+      required:
+        - limit
+        - offset
+        - total
+        - hasMore
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          description: Items per page
+        offset:
+          type: integer
+          minimum: 0
+          description: Items skipped
+        total:
+          type: integer
+          minimum: 0
+          description: Total items available
+        hasMore:
+          type: boolean
+          description: More items available beyond current page
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+        - timestamp
+        - requestId
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+          example: "TENANT_BOUNDARY_VIOLATION"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Access denied: Account not found in your tenant"
+        details:
+          type: object
+          description: Additional error context
+        timestamp:
+          type: string
+          format: date-time
+          description: Error occurrence timestamp
+        requestId:
+          type: string
+          description: Unique request identifier for tracking
+          example: "req_1707567720_abc123def"
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or format
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "INVALID_REQUEST"
+            message: "Invalid account type filter. Must be ORGANIZATION or INDIVIDUAL."
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_abc123def"
+
+    Unauthorized:
+      description: Authentication required or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "AUTHENTICATION_REQUIRED"
+            message: "Bearer token missing or invalid"
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_abc123def"
+
+    TenantBoundaryViolation:
+      description: Access denied due to tenant isolation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "TENANT_BOUNDARY_VIOLATION"
+            message: "Access denied: Account not found in your tenant"
+            details:
+              tenantId: "tenant-550e8400-e29b-41d4-a716-446655440000"
+              requestedAccountId: "acc-550e8400-e29b-41d4-a716-446655440001"
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_abc123def"
+
+    NotFound:
+      description: Requested resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "ACCOUNT_NOT_FOUND"
+            message: "Account with ID acc-550e8400-e29b-41d4-a716-446655440001 not found"
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_abc123def"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "INTERNAL_SERVER_ERROR"
+            message: "An unexpected error occurred while processing your request"
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_abc123def"

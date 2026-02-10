@@ -1,0 +1,773 @@
+openapi: 3.0.3
+info:
+  title: Invoices API
+  description: Invoice management with PDF download and metadata editing capabilities
+  version: 1.0.0
+  contact:
+    name: Accounting & Invoicing API Team
+
+servers:
+  - url: https://api.accounting.example.com/v1
+    description: Production server
+  - url: https://staging-api.accounting.example.com/v1
+    description: Staging server
+
+security:
+  - BearerAuth: []
+
+paths:
+  /accounts/{accountId}/invoices:
+    get:
+      summary: List invoices for account
+      description: |
+        Retrieves invoices for the specified account with filtering and pagination.
+        Supports FR-007: Invoice List View requirements.
+        Performance target: <1 second load time (FR-014).
+      operationId: listInvoices
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Account identifier for invoices
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant isolation boundary
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [DRAFT, ISSUED, PAID, OVERDUE]
+          description: Filter by invoice status
+        - name: frequency
+          in: query
+          schema:
+            type: string
+            enum: [PER_RIDE, DAILY, WEEKLY, MONTHLY]
+          description: Filter by billing frequency
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Billing period start date filter
+          example: "2026-01-01"
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Billing period end date filter
+          example: "2026-01-31"
+        - name: minAmount
+          in: query
+          schema:
+            type: number
+            format: double
+            minimum: 0
+          description: Minimum total amount filter
+        - name: maxAmount
+          in: query
+          schema:
+            type: number
+            format: double
+            minimum: 0
+          description: Maximum total amount filter
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          description: Maximum invoices to return
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Number of invoices to skip
+        - name: orderBy
+          in: query
+          schema:
+            type: string
+            enum: [billingPeriodEnd, totalAmount, status]
+            default: billingPeriodEnd
+          description: Field to order results by
+        - name: orderDirection
+          in: query
+          schema:
+            type: string
+            enum: [ASC, DESC]
+            default: DESC
+          description: Sort direction
+      responses:
+        '200':
+          description: Successfully retrieved invoices
+          headers:
+            X-Total-Count:
+              description: Total invoices matching filters
+              schema:
+                type: integer
+            X-Performance-Time:
+              description: Query execution time in milliseconds
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Invoice'
+                  pagination:
+                    $ref: '#/components/schemas/PaginationInfo'
+                  summary:
+                    $ref: '#/components/schemas/InvoiceSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TenantBoundaryViolation'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /invoices/{invoiceId}:
+    get:
+      summary: Get invoice details
+      description: |
+        Retrieves detailed information for a specific invoice.
+        Supports FR-008: Invoice Detail View requirements.
+      operationId: getInvoiceById
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Unique invoice identifier
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant isolation boundary
+      responses:
+        '200':
+          description: Invoice details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TenantBoundaryViolation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    patch:
+      summary: Update invoice metadata
+      description: |
+        Updates only non-financial metadata fields of an invoice.
+        Supports FR-010: Editable Invoice Fields and FR-011: Non-Editable Fields.
+        Financial data (amounts, line items, payments) cannot be modified.
+      operationId: updateInvoiceMetadata
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Invoice identifier
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant isolation boundary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvoiceMetadataUpdate'
+      responses:
+        '200':
+          description: Invoice metadata updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TenantBoundaryViolation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ImmutableFieldModification'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /invoices/{invoiceId}/pdf:
+    get:
+      summary: Download invoice PDF
+      description: |
+        Downloads the PDF version of the invoice that matches backend format exactly.
+        Supports FR-009: Invoice Download requirements.
+      operationId: downloadInvoicePdf
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Invoice identifier
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Tenant isolation boundary
+      responses:
+        '200':
+          description: PDF file generated successfully
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              description: Attachment filename
+              schema:
+                type: string
+                example: "attachment; filename=\"invoice-INV-2026-001.pdf\""
+            Content-Length:
+              description: PDF file size in bytes
+              schema:
+                type: integer
+            X-Generation-Time:
+              description: PDF generation time in milliseconds
+              schema:
+                type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TenantBoundaryViolation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: PDF generation service temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: "PDF_GENERATION_UNAVAILABLE"
+                message: "PDF generation service is temporarily unavailable. Please try again in a few minutes."
+                timestamp: "2026-02-09T14:30:00Z"
+                requestId: "req_1707567720_ghi789jkl"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Invoice:
+      type: object
+      description: Invoice entity for list view
+      required:
+        - id
+        - number
+        - accountId
+        - tenantId
+        - billingPeriod
+        - frequency
+        - totalAmount
+        - amountPaid
+        - outstandingAmount
+        - status
+        - generatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique invoice identifier
+          example: "inv-990e8400-e29b-41d4-a716-446655440001"
+        number:
+          type: string
+          description: Human-readable invoice number
+          pattern: '^INV-\d{4}-\d{3,}$'
+          example: "INV-2026-001"
+        accountId:
+          type: string
+          format: uuid
+          description: Associated account identifier
+          example: "acc-550e8400-e29b-41d4-a716-446655440001"
+        tenantId:
+          type: string
+          format: uuid
+          description: Tenant boundary identifier
+          example: "tenant-550e8400-e29b-41d4-a716-446655440000"
+        billingPeriod:
+          $ref: '#/components/schemas/BillingPeriod'
+        frequency:
+          type: string
+          enum: [PER_RIDE, DAILY, WEEKLY, MONTHLY]
+          description: Invoice generation frequency
+          example: "MONTHLY"
+        totalAmount:
+          $ref: '#/components/schemas/FinancialAmount'
+        amountPaid:
+          $ref: '#/components/schemas/FinancialAmount'
+        outstandingAmount:
+          $ref: '#/components/schemas/FinancialAmount'
+        status:
+          type: string
+          enum: [DRAFT, ISSUED, PAID, OVERDUE]
+          description: Current invoice status
+          example: "ISSUED"
+        generatedAt:
+          type: string
+          format: date-time
+          description: Invoice creation timestamp
+          example: "2026-02-01T08:00:00Z"
+
+    InvoiceDetail:
+      allOf:
+        - $ref: '#/components/schemas/Invoice'
+        - type: object
+          properties:
+            lineItems:
+              type: array
+              description: Individual ride charges (immutable)
+              items:
+                $ref: '#/components/schemas/InvoiceLineItem'
+            appliedPayments:
+              type: array
+              description: Payments allocated to invoice (immutable)
+              items:
+                $ref: '#/components/schemas/AppliedPayment'
+            notes:
+              type: string
+              maxLength: 2000
+              description: Administrative notes (editable)
+              example: "Customer requested itemized breakdown"
+            internalReference:
+              type: string
+              maxLength: 100
+              description: Internal tracking reference (editable)
+              example: "Q1-2026-BATCH-12"
+            billingContact:
+              $ref: '#/components/schemas/BillingContact'
+            auditInfo:
+              $ref: '#/components/schemas/InvoiceAuditInfo'
+            pdfUrl:
+              type: string
+              format: uri
+              description: URL for PDF download
+              example: "/invoices/inv-990e8400-e29b-41d4-a716-446655440001/pdf"
+
+    InvoiceLineItem:
+      type: object
+      description: Individual ride charge within invoice (immutable)
+      required:
+        - rideId
+        - serviceDate
+        - fare
+        - description
+      properties:
+        rideId:
+          type: string
+          description: Originating ride identifier
+          example: "ride-770e8400-e29b-41d4-a716-446655440002"
+        serviceDate:
+          type: string
+          format: date-time
+          description: When the ride service occurred
+          example: "2026-01-15T14:30:00Z"
+        fare:
+          $ref: '#/components/schemas/FinancialAmount'
+        description:
+          type: string
+          maxLength: 500
+          description: Ride service description
+          example: "Medical transport: City General to Regional Clinic"
+        passengerName:
+          type: string
+          maxLength: 255
+          description: Passenger name for the ride
+          example: "John Doe"
+        routeDescription:
+          type: string
+          maxLength: 500
+          description: Route taken for the ride
+          example: "123 Main St to 456 Oak Ave (15.2 miles)"
+        additionalCharges:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                example: "WAIT_TIME"
+              amount:
+                $ref: '#/components/schemas/FinancialAmount'
+              description:
+                type: string
+
+    AppliedPayment:
+      type: object
+      description: Payment allocation to invoice (immutable)
+      required:
+        - paymentId
+        - amount
+        - appliedDate
+        - paymentMethod
+      properties:
+        paymentId:
+          type: string
+          description: Originating payment identifier
+          example: "pay-880e8400-e29b-41d4-a716-446655440004"
+        amount:
+          $ref: '#/components/schemas/FinancialAmount'
+        appliedDate:
+          type: string
+          format: date-time
+          description: When payment was applied to invoice
+          example: "2026-01-20T10:15:00Z"
+        paymentMethod:
+          type: string
+          enum: [CASH, CHECK, CREDIT_CARD, ACH, WIRE_TRANSFER]
+          description: Method of payment
+          example: "ACH"
+        referenceNumber:
+          type: string
+          maxLength: 100
+          description: Payment reference number
+          example: "ACH-20260120-001"
+        processingFee:
+          $ref: '#/components/schemas/FinancialAmount'
+          nullable: true
+          description: Fee charged for payment processing
+
+    BillingPeriod:
+      type: object
+      description: Time range for invoice coverage
+      required:
+        - startDate
+        - endDate
+        - description
+      properties:
+        startDate:
+          type: string
+          format: date
+          description: Start of billing period
+          example: "2026-01-01"
+        endDate:
+          type: string
+          format: date
+          description: End of billing period
+          example: "2026-01-31"
+        description:
+          type: string
+          maxLength: 100
+          description: Human-readable period description
+          example: "January 2026"
+
+    BillingContact:
+      type: object
+      description: Contact information for billing (editable)
+      required:
+        - name
+        - email
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          description: Contact person name
+          example: "Jane Smith"
+        email:
+          type: string
+          format: email
+          maxLength: 320
+          description: Contact email address
+          example: "billing@citygeneral.com"
+        phone:
+          type: string
+          maxLength: 20
+          pattern: '^\+?[\d\s\-\(\)\.]+$'
+          description: Contact phone number
+          example: "+1 (555) 123-4567"
+        address:
+          $ref: '#/components/schemas/Address'
+
+    Address:
+      type: object
+      properties:
+        street:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 50
+        zipCode:
+          type: string
+          pattern: '^\d{5}(-\d{4})?$'
+        country:
+          type: string
+          maxLength: 50
+          default: "USA"
+
+    InvoiceAuditInfo:
+      type: object
+      description: Audit information for invoice (FR-012)
+      required:
+        - generatedBy
+        - generatedAt
+        - lastMetadataUpdate
+      properties:
+        generatedBy:
+          type: string
+          enum: [SYSTEM]
+          description: Always system-generated
+          example: "SYSTEM"
+        generatedAt:
+          type: string
+          format: date-time
+          description: Invoice creation timestamp
+          example: "2026-02-01T08:00:00Z"
+        lastMetadataUpdate:
+          type: string
+          format: date-time
+          description: Last edit to non-financial fields
+          example: "2026-02-05T15:22:00Z"
+        lastMetadataUpdateBy:
+          type: string
+          description: User who made last metadata change
+          example: "user-440e8400-e29b-41d4-a716-446655440005"
+        metadataUpdateHistory:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              userId:
+                type: string
+              field:
+                type: string
+              oldValue:
+                type: string
+                nullable: true
+              newValue:
+                type: string
+                nullable: true
+
+    InvoiceMetadataUpdate:
+      type: object
+      description: Editable invoice metadata fields only
+      properties:
+        notes:
+          type: string
+          maxLength: 2000
+          description: Administrative notes
+        internalReference:
+          type: string
+          maxLength: 100
+          description: Internal tracking reference
+        billingContact:
+          $ref: '#/components/schemas/BillingContact'
+
+    InvoiceSummary:
+      type: object
+      description: Summary statistics for filtered invoices
+      required:
+        - totalInvoices
+        - totalAmount
+        - totalPaid
+        - totalOutstanding
+      properties:
+        totalInvoices:
+          type: integer
+          minimum: 0
+        totalAmount:
+          $ref: '#/components/schemas/FinancialAmount'
+        totalPaid:
+          $ref: '#/components/schemas/FinancialAmount'
+        totalOutstanding:
+          $ref: '#/components/schemas/FinancialAmount'
+        statusBreakdown:
+          type: object
+          properties:
+            draft:
+              type: integer
+            issued:
+              type: integer
+            paid:
+              type: integer
+            overdue:
+              type: integer
+        frequencyBreakdown:
+          type: object
+          properties:
+            perRide:
+              type: integer
+            daily:
+              type: integer
+            weekly:
+              type: integer
+            monthly:
+              type: integer
+
+    FinancialAmount:
+      type: object
+      required:
+        - value
+        - cents
+        - formatted
+        - currency
+      properties:
+        value:
+          type: number
+          format: double
+        cents:
+          type: integer
+        formatted:
+          type: string
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          example: "USD"
+
+    PaginationInfo:
+      type: object
+      required:
+        - limit
+        - offset
+        - total
+        - hasMore
+      properties:
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+        hasMore:
+          type: boolean
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+        - timestamp
+        - requestId
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    TenantBoundaryViolation:
+      description: Tenant isolation violation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    AccountNotFound:
+      description: Account not found in tenant
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: Invoice not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    ImmutableFieldModification:
+      description: Attempted modification of immutable financial data
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: "IMMUTABLE_FIELD_MODIFICATION"
+            message: "Financial fields cannot be modified. Only notes, internalReference, and billingContact can be updated."
+            details:
+              immutableFields: ["totalAmount", "lineItems", "appliedPayments"]
+              editableFields: ["notes", "internalReference", "billingContact"]
+            timestamp: "2026-02-09T14:30:00Z"
+            requestId: "req_1707567720_ghi789jkl"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
